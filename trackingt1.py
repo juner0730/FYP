@@ -23,6 +23,9 @@ def run_tracking(opt):
 
     dataset = LoadImages(opt.source, img_size=opt.imgsz, stride=32)
 
+    # 打開一個文件來記錄檢測結果
+    log_file = open("detection_log.txt", "w")
+    
     for frame_id, (path, img, im0, _) in enumerate(dataset):
         img_tensor = torch.from_numpy(img).to(device)
         img_tensor = img_tensor.half() if device.type != 'cpu' else img_tensor.float()
@@ -34,20 +37,48 @@ def run_tracking(opt):
             pred = model(img_tensor)[0]
             pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)[0]
 
+        # 記錄檢測結果
+        log_file.write(f"Frame {frame_id}:\n")
+        
         if pred is not None and len(pred):
             pred[:, :4] = scale_coords(img_tensor.shape[2:], pred[:, :4], im0.shape).round()
             dets = pred.cpu().numpy()
+            log_file.write(f"  Detections: {len(dets)}\n")
+            for i, det in enumerate(dets):
+                cls = int(det[5])
+                conf = det[4]
+                bbox = det[:4]
+                log_file.write(f"    Det {i}: class={cls}, conf={conf:.4f}, bbox={bbox}\n")
         else:
             dets = []
+            log_file.write("  No detections\n")
 
         online_targets = tracker.update(dets, im0.shape, img_tensor.shape)
-
+        log_file.write(f"  Tracks: {len(online_targets)}\n")
+        for t in online_targets:
+            log_file.write(f"    Track {t.track_id}: class={t.cls}, bbox={t.tlbr}\n")
+        log_file.write("\n")
+        
+        # 繪製檢測框和跟蹤ID
+        im0_with_dets = im0.copy()
+        for det in dets:
+            x1, y1, x2, y2, conf, cls = det
+            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+            cls = int(cls)
+            label = f"{opt.names[cls]}: {conf:.2f}"
+            cv2.rectangle(im0_with_dets, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(im0_with_dets, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        # 繪製跟蹤結果
         im0 = draw_tracks(im0, online_targets, names=opt.names)
 
-        cv2.imshow("Tracking", im0)
+        # 顯示檢測和跟蹤結果
+        combined = np.hstack((im0_with_dets, im0))
+        cv2.imshow("Detection (left) vs Tracking (right)", combined)
         if cv2.waitKey(1) == ord('q'):
             break
 
+    log_file.close()
     cv2.destroyAllWindows()
 
 
@@ -55,30 +86,18 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', type=str, default='yolov7.pt')
+    parser.add_argument('--weights', type=str, default='old_data_Add_Xian_Taiyuan4CAM_finetune_10Label_new_Data0713_new.pt')
     parser.add_argument('--source', type=str, default='football.mp4')
     parser.add_argument('--imgsz', type=int, default=640)
     parser.add_argument('--conf-thres', type=float, default=0.3)
     parser.add_argument('--iou-thres', type=float, default=0.45)
-    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--device', default='cuda:0')
     parser.add_argument('--fps', type=int, default=30)
     parser.add_argument('--track_thresh', type=float, default=0.5)
     parser.add_argument('--track_buffer', type=int, default=30)
-    parser.add_argument('--classes', nargs='+', type=int, default=[0, 32])  # person + sports ball
+    parser.add_argument('--classes', nargs='+', type=int, default=[0, 1])  # person + ball (adjusted based on your labels)
     parser.add_argument('--agnostic-nms', action='store_true')
-    parser.add_argument('--names', type=list, default=[
-        "person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck",
-        "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
-        "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
-        "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
-        "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
-        "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl",
-        "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
-        "donut", "cake", "chair", "sofa", "pottedplant", "bed", "diningtable", "toilet",
-        "tvmonitor", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
-        "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors",
-        "teddy bear", "hair drier", "toothbrush"
-    ])
+    parser.add_argument('--names', type=list, default=[ "person", "sports ball"])
     opt = parser.parse_args()
 
     run_tracking(opt)
